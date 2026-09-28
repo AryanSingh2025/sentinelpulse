@@ -5,6 +5,7 @@ import os
 import re
 import statistics
 from collections import deque
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -30,7 +31,24 @@ LOG_RE = re.compile(
     r"^(?P<ts>\S+\s+\S+)\s+(?P<level>[A-Z]+)\s+(?P<service>\S+)\s+(?P<message>.*)$"
 )
 
-app = FastAPI(title="SentinelPulse Log Anomaly Detector")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    monitor_task = None
+    if not state.started:
+        state.started = True
+        monitor_task = asyncio.create_task(monitor_file())
+
+    try:
+        yield
+    finally:
+        if monitor_task is not None:
+            monitor_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await monitor_task
+            state.started = False
+
+
+app = FastAPI(title="SentinelPulse Log Anomaly Detector", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -267,13 +285,6 @@ async def monitor_file():
             await broadcast({"type": "system", "message": f"Monitor error: {exc}"})
 
         await asyncio.sleep(0.25)
-
-
-@app.on_event("startup")
-async def startup():
-    if not state.started:
-        state.started = True
-        asyncio.create_task(monitor_file())
 
 
 @app.get("/")
