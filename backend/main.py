@@ -53,7 +53,7 @@ class MonitorState:
         self.last_event = None
         self.total_events = 0
         self.total_errors = 0
-        self.last_alert_at = 0.0
+        self.anomaly_active = False
         self.system_status = "learning"
 
     @property
@@ -112,16 +112,21 @@ def classify_severity(z: float, rate: float, baseline: float) -> str:
     return "LOW"
 
 
+def recommend_action(message: str) -> str:
+    text = message.casefold()
+    if "memory" in text or "out of memory" in text:
+        return "Inspect memory usage and recent workload changes."
+    if any(term in text for term in ("authentication", "unauthorized", "token", "credential")):
+        return "Inspect authentication failures and recent credential or configuration changes."
+    if any(term in text for term in ("database", "connection", "timeout")):
+        return "Inspect database connectivity and recent deployments."
+    return "Inspect the affected service logs and recent deployments."
+
+
 def build_alert(rate: float, mean: float, std: float, event: dict) -> dict:
     z = (rate - mean) / std if std > 1e-9 else (10.0 if rate > mean else 0.0)
     severity = classify_severity(z, rate, mean)
-
-    if severity == "CRITICAL":
-        recommendation = "Page the on-call engineer and inspect the affected service immediately."
-    elif severity == "HIGH":
-        recommendation = "Inspect recent deployments and service dependencies."
-    else:
-        recommendation = "Monitor the service and inspect the latest error cluster."
+    message = event.get("message", "")
 
     return {
         "id": f"{state.total_events}-{int(datetime.now().timestamp() * 1000)}",
@@ -131,12 +136,15 @@ def build_alert(rate: float, mean: float, std: float, event: dict) -> dict:
         "baseline_rate": round(mean, 3),
         "z_score": round(z, 2),
         "service": event.get("service", "unknown"),
-        "message": event.get("message", ""),
-        "recommendation": recommendation,
+        "message": message,
+        "recommendation": recommend_action(message),
     }
 
 
 def publish_sns(alert: dict):
+    if alert.get("severity") not in {"HIGH", "CRITICAL"}:
+        return {"sent": False, "reason": "SNS notifications are limited to HIGH and CRITICAL alerts"}
+
     if not SNS_TOPIC_ARN:
         return {"sent": False, "reason": "AWS_SNS_TOPIC_ARN not configured"}
 
@@ -199,16 +207,14 @@ async def process_event(event: dict):
     state.system_status = "anomaly" if z >= Z_THRESHOLD else "normal"
     record_metric(rate)
 
-    if z >= Z_THRESHOLD:
-        # Avoid duplicate alert spam while the same burst continues.
-        now = asyncio.get_running_loop().time()
-        if now - state.last_alert_at >= 2.0:
-            alert = build_alert(rate, mean, std, event)
-            state.alerts.appendleft(alert)
-            state.last_alert_at = now
-            aws_result = publish_sns(alert)
-            alert["aws"] = aws_result
-            await broadcast({"type": "alert", "data": alert})
+    is_anomaly = z >= Z_THRESHOLD
+    if is_anomaly and not state.anomaly_active:
+        alert = build_alert(rate, mean, std, event)
+        state.alerts.appendleft(alert)
+        alert["aws"] = publish_sns(alert)
+        await broadcast({"type": "alert", "data": alert})
+
+    state.anomaly_active = is_anomaly
 
     await broadcast({"type": "metric", "data": snapshot()})
 

@@ -140,7 +140,8 @@ export default function App() {
                 <div className="alertBody">
                   <div className="alertTitle"><b>{a.severity} anomaly</b><span>{a.service}</span><time>{new Date(a.timestamp).toLocaleTimeString()}</time></div>
                   <div>Error rate <b>{(a.error_rate*100).toFixed(1)}%</b> vs baseline <b>{(a.baseline_rate*100).toFixed(1)}%</b> · z-score <b>{a.z_score}</b></div>
-                  <p>{a.recommendation}</p>
+                  <p><b>Signal:</b> {a.message}</p>
+                  <p><b>Recommended action:</b> {a.recommendation}</p>
                 </div>
               </div>)
             }
