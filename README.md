@@ -1,114 +1,130 @@
-# SentinelPulse — Real-Time Log Anomaly Detector
+# SentinelPulse
 
-SentinelPulse monitors a continuously growing application log, calculates a rolling error rate, learns a normal baseline, detects statistically significant deviations, assigns severity, streams alerts to a React dashboard, and optionally publishes alerts to AWS SNS.
+**Real-Time Log Anomaly Detector with Alert Feed**
+
+SentinelPulse watches a growing application log, calculates a rolling error rate, compares it with a baseline, and sends anomaly alerts to a live React dashboard. It can also publish HIGH and CRITICAL alerts to AWS SNS.
+
+## Features
+
+- Tails `data/app.log` as new lines are appended.
+- Uses a sliding window to calculate the current error rate.
+- Learns a baseline from the first completed normal windows and avoids adding anomalous windows to it.
+- Scores deviations with a z-score and assigns MEDIUM, HIGH, or CRITICAL severity.
+- Sends metrics and alerts to the dashboard over WebSocket.
+- Gives deterministic, message-based investigation recommendations.
+- Optionally publishes HIGH and CRITICAL alerts to AWS SNS.
 
 ## Architecture
 
-```text
-Growing app.log
-      |
-      v
-Python file monitor (FastAPI)
-      |
-      +--> Sliding window ---> Error rate
-      |                           |
-      |                           v
-      |                    Baseline mean/std
-      |                           |
-      |                           v
-      |                    Z-score detection
-      |                           |
-      |                  +--------+--------+
-      |                  |                 |
-      v                  v                 v
-React WebSocket     Alert feed        AWS SNS
-dashboard
+```mermaid
+flowchart LR
+    L[Growing data/app.log] --> M[FastAPI log monitor]
+    M --> W[Sliding window]
+    W --> R[Rolling error rate]
+    R --> B[Baseline and z-score]
+    B --> A[Severity and recommendation]
+    A --> WS[WebSocket]
+    WS --> UI[React dashboard]
+    A --> SNS[AWS SNS, optional]
 ```
 
-## Quick start
+## Requirements
 
-### 1. Backend
+- Windows, macOS, or Linux
+- Python 3.11 or newer (regular CPython; do not use the experimental free-threaded `3.13t` interpreter with these pinned dependencies)
+- Node.js LTS and npm
+- VS Code is recommended for the three-terminal demo workflow
 
-```bash
+## Run in VS Code on Windows
+
+Open the project root—the folder containing `backend`, `frontend`, and `scripts`—in VS Code. Open three terminals using **Terminal → New Terminal**. Keep each process running in its own terminal.
+
+### Terminal 1: backend
+
+```powershell
 cd backend
-python -m venv .venv
-# Windows:
-.venv\Scripts\activate
-# macOS/Linux:
-# source .venv/bin/activate
-pip install -r requirements.txt
-copy .env.example .env
+py -3.13 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
 uvicorn main:app --reload --port 8000
 ```
 
-### 2. Frontend
+If your installed regular Python version is 3.12 or 3.11, replace `py -3.13` with `py -3.12` or `py -3.11`.
 
-Open a second terminal:
+If PowerShell blocks activation, allow scripts only for that terminal session, then activate again:
 
-```bash
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
+
+The health endpoint is http://127.0.0.1:8000/health.
+
+### Terminal 2: frontend
+
+Open a new terminal at the project root:
+
+```powershell
 cd frontend
 npm install
 npm run dev
 ```
 
-Open http://localhost:5173
+Open the local URL Vite prints, normally http://localhost:5173.
 
-### 3. Generate a live log stream
+### Terminal 3: demo logs
 
-Open a third terminal:
+Open a new terminal at the project root:
 
-```bash
+```powershell
 python scripts/generate_logs.py
 ```
 
-The generator deliberately creates normal traffic followed by an error burst, making the anomaly detector easy to demonstrate.
-
-## API
-
-- `GET /health` — basic health check.
-- `GET /api/status` — current rate, baseline, monitor status, and active anomaly count.
-- `GET /api/metrics` — recent timestamped error-rate observations.
-- `GET /api/alerts` — recent alerts.
-- `WS /ws` — live metric and alert updates.
+The generator appends mostly normal events and periodically injects an error burst. Wait for baseline learning and then for the burst to trigger an alert. Press **Ctrl+C** in this terminal to stop log generation.
 
 ## Run the tests
 
-From the project root, install the development requirements and run pytest:
+From the project root, use the virtual environment created in `backend`:
 
 ```powershell
-python -m pip install -r backend/requirements-dev.txt
-python -m pytest
+.\backend\.venv\Scripts\python.exe -m pip install -r backend\requirements-dev.txt
+.\backend\.venv\Scripts\python.exe -m pytest
 ```
 
-## AWS SNS
+The tests cover log parsing, severity and zero-standard-deviation handling, alert de-duplication, SNS severity filtering, and the health/status/metrics endpoints.
 
-Create an SNS topic in AWS and put its ARN into `backend/.env`:
+## API
 
-```env
-AWS_REGION=ap-south-1
-AWS_SNS_TOPIC_ARN=arn:aws:sns:ap-south-1:YOUR_ACCOUNT_ID:sentinelpulse-alerts
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/health` | Basic health response: `{"status":"ok"}` |
+| GET | `/api/health` | Health details, log path, and SNS configuration state |
+| GET | `/api/status` | Current rate, baseline, monitor status, and active anomaly count |
+| GET | `/api/metrics` | Recent timestamped error-rate observations |
+| GET | `/api/alerts` | Recent alerts |
+| WebSocket | `/ws` | Live metric and alert updates |
+
+## Detection and alert behavior
+
+The default sliding window contains 20 events. The baseline uses the first three complete rolling-window observations by default (`BASELINE_WINDOWS` in `backend/.env`). After baseline learning, the detector compares each error-rate observation with the baseline mean and standard deviation. Anomalous windows do not update the baseline.
+
+Severity thresholds use z-score: MEDIUM at 2.5, HIGH at 3, and CRITICAL at 4. Absolute rate overrides also apply at 40%, 60%, and 80%, or at 20, 35, and 50 percentage points above baseline, respectively. A single alert is created when traffic enters an anomalous period; another can be created after the rate returns to normal and a new anomaly begins. Recommendations are selected by deterministic rules for database/connectivity/timeouts, authentication/token errors, and memory errors.
+
+## AWS SNS (optional)
+
+For local use, leave `AWS_SNS_TOPIC_ARN` empty in `backend/.env`. To enable notifications, set `AWS_REGION` and `AWS_SNS_TOPIC_ARN`, then configure credentials using your normal AWS credential provider or AWS CLI. SentinelPulse only sends HIGH and CRITICAL notifications. Never commit `.env` or AWS credentials.
+
+## Project structure
+
+```text
+backend/       FastAPI monitor, detector, and AWS notifier
+frontend/      React + Vite dashboard
+scripts/       Continuous demo log generator
+data/          Local app.log input
+tests/         Pytest parser, detector, and API tests
 ```
 
-Configure AWS credentials locally using the AWS CLI (`aws configure`) or your normal AWS credential mechanism.
+## Git branch
 
-If no SNS topic is configured, the application still works locally and marks AWS delivery as not configured.
-
-## Demo flow
-
-1. Start backend.
-2. Start frontend.
-3. Start log generator.
-4. Wait for baseline learning.
-5. The generator enters an error burst.
-6. Error rate rises above baseline.
-7. SentinelPulse creates a severity alert.
-8. Alert appears in the browser immediately through WebSocket.
-9. If SNS is configured, the same alert is published to AWS.
-
-## Why the approach is useful
-
-The baseline is protected from anomaly contamination: detected anomalous windows are not used to learn the normal baseline. This prevents a prolonged incident from slowly becoming the new "normal."
-
-## Development
-
-The project is being developed on the `feature/sentinelpulse-mvp` branch. Keep local environment files and AWS credentials out of Git.
+Development is on `feature/sentinelpulse-mvp`. Push changes to that branch; merge into `main` only when you choose to.
