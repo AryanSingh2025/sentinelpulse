@@ -59,6 +59,42 @@ app.add_middleware(
 )
 
 
+class LogFileCursor:
+    """Track complete appended lines and reset when the file is replaced or truncated."""
+
+    def __init__(self):
+        self.position = 0
+        self.identity = None
+        self.pending_line = ""
+
+    def read_new_lines(self, path: Path) -> list[str]:
+        path = Path(path)
+        file_stat = path.stat()
+        identity = (file_stat.st_dev, file_stat.st_ino)
+
+        was_replaced = self.identity is not None and identity != self.identity
+        was_truncated = file_stat.st_size < self.position
+        if was_replaced or was_truncated:
+            self.position = 0
+            self.pending_line = ""
+
+        self.identity = identity
+        if file_stat.st_size <= self.position:
+            return []
+
+        with path.open("r", encoding="utf-8", errors="replace", newline="") as log_file:
+            log_file.seek(self.position)
+            appended_text = log_file.read()
+            self.position = log_file.tell()
+
+        pieces = (self.pending_line + appended_text).splitlines(keepends=True)
+        self.pending_line = ""
+        if pieces and not pieces[-1].endswith(("\n", "\r")):
+            self.pending_line = pieces.pop()
+
+        return [line.rstrip("\r\n") for line in pieces]
+
+
 class MonitorState:
     def __init__(self):
         self.events = deque(maxlen=WINDOW_SIZE)
@@ -66,7 +102,7 @@ class MonitorState:
         self.baseline_rates = []
         self.alerts = deque(maxlen=100)
         self.clients = set()
-        self.file_position = 0
+        self.file_cursor = LogFileCursor()
         self.started = False
         self.last_event = None
         self.total_events = 0
@@ -267,20 +303,10 @@ async def monitor_file():
 
     while True:
         try:
-            size = LOG_FILE.stat().st_size
-            if size < state.file_position:
-                state.file_position = 0  # file was truncated/rotated
-
-            if size > state.file_position:
-                with LOG_FILE.open("r", encoding="utf-8", errors="replace") as f:
-                    f.seek(state.file_position)
-                    new_text = f.read()
-                    state.file_position = f.tell()
-
-                for line in new_text.splitlines():
-                    event = parse_line(line)
-                    if event:
-                        await process_event(event)
+            for line in state.file_cursor.read_new_lines(LOG_FILE):
+                event = parse_line(line)
+                if event:
+                    await process_event(event)
         except Exception as exc:
             await broadcast({"type": "system", "message": f"Monitor error: {exc}"})
 
