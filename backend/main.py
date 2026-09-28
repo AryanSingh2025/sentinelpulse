@@ -54,6 +54,7 @@ class MonitorState:
         self.total_events = 0
         self.total_errors = 0
         self.last_alert_at = 0.0
+        self.system_status = "learning"
 
     @property
     def baseline_mean(self):
@@ -180,7 +181,9 @@ async def process_event(event: dict):
     # Establish baseline from the first completed rolling windows.
     if len(state.baseline_rates) < BASELINE_WINDOWS:
         state.baseline_rates.append(rate)
-        state.rate_history.append(rate)
+        record_metric(rate)
+        if len(state.baseline_rates) >= BASELINE_WINDOWS:
+            state.system_status = "normal"
         await broadcast({
             "type": "metric",
             "data": snapshot(),
@@ -193,7 +196,8 @@ async def process_event(event: dict):
     # Add only normal rates to baseline; anomalies should not poison the baseline.
     z = (rate - mean) / std if std > 1e-9 else (10.0 if rate > mean else 0.0)
 
-    state.rate_history.append(rate)
+    state.system_status = "anomaly" if z >= Z_THRESHOLD else "normal"
+    record_metric(rate)
 
     if z >= Z_THRESHOLD:
         # Avoid duplicate alert spam while the same burst continues.
@@ -218,10 +222,19 @@ def snapshot():
         "baseline_std": round(state.baseline_std, 3),
         "baseline_ready": len(state.baseline_rates) >= BASELINE_WINDOWS,
         "baseline_windows_collected": len(state.baseline_rates),
+        "system_status": state.system_status,
+        "active_alerts": int(state.system_status == "anomaly"),
         "total_events": state.total_events,
         "total_errors": state.total_errors,
         "last_event": state.last_event,
     }
+
+
+def record_metric(rate: float):
+    state.rate_history.append({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "error_rate": round(rate, 3),
+    })
 
 
 async def monitor_file():
@@ -265,6 +278,21 @@ async def root():
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "log_file": str(LOG_FILE), "aws_sns_configured": bool(SNS_TOPIC_ARN)}
+
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
+
+@app.get("/api/status")
+async def api_status():
+    return snapshot()
+
+
+@app.get("/api/metrics")
+async def api_metrics():
+    return list(state.rate_history)
 
 
 @app.get("/api/snapshot")

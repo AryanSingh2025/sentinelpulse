@@ -63,6 +63,23 @@ python scripts/generate_logs.py
 
 The generator deliberately creates normal traffic followed by an error burst, making the anomaly detector easy to demonstrate.
 
+## API
+
+- `GET /health` — basic health check.
+- `GET /api/status` — current rate, baseline, monitor status, and active anomaly count.
+- `GET /api/metrics` — recent timestamped error-rate observations.
+- `GET /api/alerts` — recent alerts.
+- `WS /ws` — live metric and alert updates.
+
+## Run the tests
+
+From the project root, install the development requirements and run pytest:
+
+```powershell
+python -m pip install -r backend/requirements-dev.txt
+python -m pytest
+```
+
 ## AWS SNS
 
 Create an SNS topic in AWS and put its ARN into `backend/.env`:
@@ -92,11 +109,6 @@ If no SNS topic is configured, the application still works locally and marks AWS
 
 The baseline is protected from anomaly contamination: detected anomalous windows are not used to learn the normal baseline. This prevents a prolonged incident from slowly becoming the new "normal."
 
-## Team split
+## Development
 
-- Member 1: Backend/log monitoring
-- Member 2: Frontend dashboard
-- Member 3: AWS SNS
-- Member 4: Testing/demo data
-- Member 5: Documentation/architecture
-- Member 6: Demo/presentation/QA
+The project is being developed on the `feature/sentinelpulse-mvp` branch. Keep local environment files and AWS credentials out of Git.

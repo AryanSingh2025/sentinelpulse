@@ -45,7 +45,9 @@ export default function App() {
     return () => { clearTimeout(timer); ws?.close() }
   }, [])
 
-  const status = metric.baseline_ready ? 'Monitoring normally' : 'Learning baseline'
+  const status = metric.system_status === 'anomaly'
+    ? 'Anomaly detected'
+    : metric.baseline_ready ? 'Monitoring normally' : 'Learning baseline'
   const latest = metric.last_event
 
   const summary = useMemo(() => {
