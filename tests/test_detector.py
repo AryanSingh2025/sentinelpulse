@@ -24,6 +24,16 @@ def test_zero_standard_deviation_produces_finite_critical_alert():
     assert alert["service"] == "payment-service"
 
 
+def test_sliding_window_error_rate_updates_as_old_events_drop():
+    state = main.MonitorState()
+    state.events.extend({"is_error": False} for _ in range(main.WINDOW_SIZE - 1))
+    state.events.append({"is_error": True})
+    assert state.current_rate == 1 / main.WINDOW_SIZE
+
+    state.events.append({"is_error": True})
+    assert state.current_rate == 2 / main.WINDOW_SIZE
+
+
 def test_recommendations_follow_the_error_message():
     assert "database connectivity" in recommend_action("Database connection timeout").lower()
     assert "authentication failures" in recommend_action("Unauthorized token").lower()
@@ -40,11 +50,20 @@ def test_sns_skips_medium_alerts_even_when_configured(monkeypatch):
     assert "HIGH and CRITICAL" in result["reason"]
 
 
+def test_sns_without_topic_configuration_does_not_raise(monkeypatch):
+    monkeypatch.setattr(main, "SNS_TOPIC_ARN", "")
+
+    result = main.publish_sns({"severity": "CRITICAL"})
+
+    assert result == {"sent": False, "reason": "AWS_SNS_TOPIC_ARN not configured"}
+
+
 def test_continuous_anomaly_creates_only_one_alert():
     state = main.state
     state.events.clear()
     state.events.extend({"is_error": False} for _ in range(main.WINDOW_SIZE - 1))
     state.baseline_rates[:] = [0.0] * main.BASELINE_WINDOWS
+    baseline_before_anomaly = state.baseline_rates.copy()
     state.alerts.clear()
     state.rate_history.clear()
     state.clients.clear()
@@ -66,3 +85,4 @@ def test_continuous_anomaly_creates_only_one_alert():
 
     assert len(state.alerts) == 1
     assert state.anomaly_active is True
+    assert state.baseline_rates == baseline_before_anomaly

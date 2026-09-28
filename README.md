@@ -94,7 +94,7 @@ From the project root, use the virtual environment created in `backend`:
 .\backend\.venv\Scripts\python.exe -m pytest
 ```
 
-The tests cover log parsing, append-only monitoring, partial lines, truncation and rotation, severity and zero-standard-deviation handling, alert de-duplication, SNS severity filtering, the health/status/metrics endpoints, and generator scenarios.
+The tests cover log parsing, append-only monitoring, partial lines, truncation and rotation, sliding-window math, baseline protection, severity and zero-standard-deviation handling, alert de-duplication, SNS filtering and missing configuration, the health/status/metrics endpoints, and generator scenarios.
 
 ## API
 
