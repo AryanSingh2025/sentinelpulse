@@ -83,6 +83,8 @@ python scripts/generate_logs.py
 
 The generator appends mostly normal events and periodically injects an error burst. Wait for baseline learning and then for the burst to trigger an alert. Press **Ctrl+C** in this terminal to stop log generation.
 
+To run a steady normal stream, use `python scripts/generate_logs.py --scenario normal`. For a predictable incident demo, stop the current generator and run `python scripts/generate_logs.py --scenario critical`; it writes 30 normal warm-up events, then switches to a 72% error rate. The default `cycle` scenario preserves the repeating burst behavior.
+
 ## Run the tests
 
 From the project root, use the virtual environment created in `backend`:
@@ -92,7 +94,7 @@ From the project root, use the virtual environment created in `backend`:
 .\backend\.venv\Scripts\python.exe -m pytest
 ```
 
-The tests cover log parsing, severity and zero-standard-deviation handling, alert de-duplication, SNS severity filtering, and the health/status/metrics endpoints.
+The tests cover log parsing, severity and zero-standard-deviation handling, alert de-duplication, SNS severity filtering, the health/status/metrics endpoints, and generator scenarios.
 
 ## API
 
